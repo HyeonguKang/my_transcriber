@@ -8,9 +8,17 @@ from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 project_dir = Path.cwd()
 datas = []
 binaries = []
-hiddenimports = collect_submodules("mlx") + collect_submodules("mlx_whisper")
+hiddenimports = (
+    collect_submodules("mlx")
+    + collect_submodules("mlx_whisper")
+    + collect_submodules("faster_whisper")
+    + collect_submodules("ctranslate2")
+    + collect_submodules("av")
+)
 datas += collect_data_files("mlx")
 datas += collect_data_files("mlx_whisper")
+datas += collect_data_files("faster_whisper")
+datas += collect_data_files("av")
 
 for binary_name in ("ffmpeg", "ffprobe"):
     binary_path = shutil.which(binary_name)

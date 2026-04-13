@@ -1,6 +1,7 @@
 import json
 import math
 import os
+import platform
 import subprocess
 import sys
 import tempfile
@@ -10,6 +11,7 @@ from datetime import datetime
 LANGUAGE = "ko"
 CHUNK_SECONDS = 30
 DEFAULT_MODEL_SIZE = "large"
+DEFAULT_COMPUTE_TYPE = "int8"
 
 
 def format_korean_time(seconds):
@@ -102,6 +104,7 @@ def _candidate_binary_paths(binary_name):
                 os.path.join(executable_dir, binary_name),
                 os.path.join(executable_dir, "bin", binary_name),
                 os.path.join(executable_dir, "..", "Resources", binary_name),
+                os.path.join(executable_dir, "..", "Frameworks", binary_name),
             ]
         )
 
@@ -158,52 +161,72 @@ def extract_chunk(input_path, start_sec, duration_sec, output_path):
     )
 
 
-def transcribe_to_srt(
+def detect_backend():
+    machine = platform.machine().lower()
+    system = platform.system().lower()
+
+    if system == "darwin" and machine in {"arm64", "aarch64"}:
+        return "mlx"
+    return "faster-whisper"
+
+
+def _normalize_model_name(model_size, backend):
+    if backend == "mlx":
+        return model_size
+
+    model_map = {
+        "tiny": "tiny",
+        "base": "base",
+        "small": "small",
+        "medium": "medium",
+        "large": "large-v3",
+        "turbo": "large-v3-turbo",
+    }
+    return model_map.get(model_size, model_size)
+
+
+def _build_output_file(audio_file, backend_name, model_size):
+    output_dir = get_output_dir()
+    base_name = os.path.splitext(os.path.basename(audio_file))[0]
+    timestamp = datetime.now().strftime("%y%m%d-%H%M%S")
+    return os.path.join(
+        output_dir,
+        f"{base_name}_{backend_name}_{model_size}_{timestamp}.srt",
+    )
+
+
+def _write_srt_segment(srt_file, index, start_sec, end_sec, text):
+    cleaned = text.strip()
+    if not cleaned:
+        return index
+
+    srt_file.write(f"{index}\n")
+    srt_file.write(f"{format_srt_time(start_sec)} --> {format_srt_time(end_sec)}\n")
+    srt_file.write(cleaned + "\n\n")
+    return index + 1
+
+
+def _transcribe_with_mlx(
     audio_file,
-    model_size=DEFAULT_MODEL_SIZE,
-    progress_callback=None,
-    log_callback=None,
+    output_file,
+    model_size,
+    total_duration,
+    progress,
+    logger,
 ):
     try:
         import mlx_whisper
     except Exception as exc:
         raise RuntimeError(
-            "mlx_whisper 초기화에 실패했습니다. Apple Silicon 환경과 MLX 설치 상태를 확인해주세요."
+            "MLX 백엔드 초기화에 실패했습니다. Apple Silicon 환경과 MLX 설치 상태를 확인해주세요."
         ) from exc
 
-    if not audio_file:
-        raise ValueError("입력 파일 경로가 비어 있습니다.")
-
-    audio_file = os.path.abspath(audio_file)
-    if not os.path.isfile(audio_file):
-        raise FileNotFoundError(f"입력 파일을 찾을 수 없습니다: {audio_file}")
-
     model_repo = f"mlx-community/whisper-{model_size}-mlx"
-    output_dir = get_output_dir()
-
-    base_name = os.path.splitext(os.path.basename(audio_file))[0]
-    timestamp = datetime.now().strftime("%y%m%d-%H%M%S")
-    output_file = os.path.join(
-        output_dir, f"{base_name}_mlx_{model_size}_{timestamp}.srt"
-    )
-
-    logger = log_callback or _default_logger
-    progress = progress_callback or _default_progress
-    start_time = time.perf_counter()
-
-    logger(f"입력 파일: {audio_file}")
-    logger(f"모델: {model_size}")
-    logger("오디오 길이 확인 시작")
-
-    total_duration = get_audio_duration(audio_file)
-    if total_duration <= 0:
-        raise ValueError("길이가 0초인 파일은 변환할 수 없습니다.")
-
-    logger(f"오디오 길이 확인 완료: {format_korean_time(total_duration)}")
-
     total_chunks = math.ceil(total_duration / CHUNK_SECONDS)
+    logger(f"백엔드: MLX ({model_size})")
     logger(f"chunk 분할 시작: 총 {total_chunks}개")
 
+    start_time = time.perf_counter()
     srt_index = 1
 
     with tempfile.TemporaryDirectory() as tmpdir, open(
@@ -226,26 +249,115 @@ def transcribe_to_srt(
             for seg in result.get("segments", []):
                 abs_start = chunk_start + float(seg["start"])
                 abs_end = chunk_start + float(seg["end"])
-                text = seg["text"].strip()
-
-                if not text:
-                    continue
-
-                srt_file.write(f"{srt_index}\n")
-                srt_file.write(
-                    f"{format_srt_time(abs_start)} --> {format_srt_time(abs_end)}\n"
+                srt_index = _write_srt_segment(
+                    srt_file,
+                    srt_index,
+                    abs_start,
+                    abs_end,
+                    seg["text"],
                 )
-                srt_file.write(text + "\n\n")
-                srt_index += 1
 
             done_sec = min(chunk_start + chunk_duration, total_duration)
             elapsed = time.perf_counter() - start_time
             progress(done_sec, total_duration, chunk_idx + 1, total_chunks, elapsed)
 
-    total_elapsed = time.perf_counter() - start_time
-    logger(f"SRT 생성 완료: {output_file}")
-    logger(f"총 실행 시간: {format_korean_time(total_elapsed)}")
 
+def _transcribe_with_faster_whisper(
+    audio_file,
+    output_file,
+    model_size,
+    total_duration,
+    progress,
+    logger,
+):
+    try:
+        from faster_whisper import WhisperModel
+    except Exception as exc:
+        raise RuntimeError(
+            "faster-whisper 초기화에 실패했습니다. Intel Mac에서는 faster-whisper 설치 상태를 확인해주세요."
+        ) from exc
+
+    runtime_model = _normalize_model_name(model_size, "faster-whisper")
+    logger(f"백엔드: faster-whisper ({runtime_model})")
+    logger("모델 로딩 시작")
+
+    model = WhisperModel(runtime_model, device="cpu", compute_type=DEFAULT_COMPUTE_TYPE)
+
+    logger("오디오 전사 시작")
+    start_time = time.perf_counter()
+    segments, info = model.transcribe(audio_file, language=LANGUAGE, vad_filter=True)
+
+    srt_index = 1
+    total_chunks = 1
+    detected_duration = info.duration or total_duration
+
+    with open(output_file, "w", encoding="utf-8") as srt_file:
+        for seg in segments:
+            srt_index = _write_srt_segment(
+                srt_file,
+                srt_index,
+                float(seg.start),
+                float(seg.end),
+                seg.text,
+            )
+
+            elapsed = time.perf_counter() - start_time
+            done_sec = min(float(seg.end), detected_duration)
+            progress(done_sec, detected_duration, 1, total_chunks, elapsed)
+
+    elapsed = time.perf_counter() - start_time
+    progress(detected_duration, detected_duration, 1, total_chunks, elapsed)
+
+
+def transcribe_to_srt(
+    audio_file,
+    model_size=DEFAULT_MODEL_SIZE,
+    progress_callback=None,
+    log_callback=None,
+):
+    if not audio_file:
+        raise ValueError("입력 파일 경로가 비어 있습니다.")
+
+    audio_file = os.path.abspath(audio_file)
+    if not os.path.isfile(audio_file):
+        raise FileNotFoundError(f"입력 파일을 찾을 수 없습니다: {audio_file}")
+
+    logger = log_callback or _default_logger
+    progress = progress_callback or _default_progress
+
+    logger(f"입력 파일: {audio_file}")
+    logger("오디오 길이 확인 시작")
+
+    total_duration = get_audio_duration(audio_file)
+    if total_duration <= 0:
+        raise ValueError("길이가 0초인 파일은 변환할 수 없습니다.")
+
+    logger(f"오디오 길이 확인 완료: {format_korean_time(total_duration)}")
+
+    backend = detect_backend()
+    runtime_model = _normalize_model_name(model_size, backend)
+    output_file = _build_output_file(audio_file, backend, runtime_model)
+
+    if backend == "mlx":
+        _transcribe_with_mlx(
+            audio_file,
+            output_file,
+            model_size,
+            total_duration,
+            progress,
+            logger,
+        )
+    else:
+        _transcribe_with_faster_whisper(
+            audio_file,
+            output_file,
+            model_size,
+            total_duration,
+            progress,
+            logger,
+        )
+
+    logger(f"SRT 생성 완료: {output_file}")
     return output_file
 
 
@@ -260,7 +372,8 @@ def main(argv=None):
     model_size = argv[1] if len(argv) > 1 else DEFAULT_MODEL_SIZE
 
     try:
-        transcribe_to_srt(audio_file, model_size=model_size)
+        output_file = transcribe_to_srt(audio_file, model_size=model_size)
+        print(f"SRT 생성 완료: {output_file}")
         return 0
     except Exception as exc:
         print(f"오류: {exc}", file=sys.stderr)
