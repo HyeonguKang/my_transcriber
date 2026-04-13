@@ -7,8 +7,6 @@ import tempfile
 import time
 from datetime import datetime
 
-import mlx_whisper
-
 LANGUAGE = "ko"
 CHUNK_SECONDS = 30
 DEFAULT_MODEL_SIZE = "large"
@@ -166,6 +164,13 @@ def transcribe_to_srt(
     progress_callback=None,
     log_callback=None,
 ):
+    try:
+        import mlx_whisper
+    except Exception as exc:
+        raise RuntimeError(
+            "mlx_whisper 초기화에 실패했습니다. Apple Silicon 환경과 MLX 설치 상태를 확인해주세요."
+        ) from exc
+
     if not audio_file:
         raise ValueError("입력 파일 경로가 비어 있습니다.")
 

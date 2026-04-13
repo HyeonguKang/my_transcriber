@@ -2,10 +2,15 @@
 from pathlib import Path
 import shutil
 
+from PyInstaller.utils.hooks import collect_data_files, collect_submodules
+
 
 project_dir = Path.cwd()
 datas = []
 binaries = []
+hiddenimports = collect_submodules("mlx") + collect_submodules("mlx_whisper")
+datas += collect_data_files("mlx")
+datas += collect_data_files("mlx_whisper")
 
 for binary_name in ("ffmpeg", "ffprobe"):
     binary_path = shutil.which(binary_name)
@@ -18,7 +23,7 @@ a = Analysis(
     pathex=[str(project_dir)],
     binaries=binaries,
     datas=datas,
-    hiddenimports=[],
+    hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
