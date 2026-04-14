@@ -44,9 +44,10 @@ source .venv/bin/activate
 
 - [`build-macos.yml`](/Users/hyeongu/Documents/my_transcriber/.github/workflows/build-macos.yml:1)
 - `macos-14`에서 `arm64`
-- `macos-13`에서 `intel`
+- `macos-15-intel`에서 `intel`
 
 태그 푸시(`v*`) 또는 수동 실행으로 두 아키텍처 아티팩트를 자동 생성할 수 있습니다.
+태그 푸시로 실행되면 빌드 결과 zip 파일이 GitHub Release 자산에도 첨부됩니다.
 
 ## 저장 위치
 
