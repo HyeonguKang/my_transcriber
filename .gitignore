@@ -27,3 +27,5 @@ ENV/
 
 # Local outputs
 output_trans/
+
+notes.txt

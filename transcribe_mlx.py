@@ -50,19 +50,43 @@ def _default_logger(message):
     print(message)
 
 
-def _default_progress(done_sec, total_sec, chunk_idx, total_chunks, elapsed_sec):
+def _default_progress(
+    done_sec,
+    total_sec,
+    chunk_idx,
+    total_chunks,
+    elapsed_sec,
+    eta_sec=None,
+    avg_chunk_time=None,
+):
     progress = (done_sec / total_sec * 100) if total_sec else 0
     line = (
         f"\r진행률: {progress:6.2f}% | "
         f"경과: {format_korean_time(elapsed_sec)} | "
         f"chunk: {chunk_idx}/{total_chunks}"
     )
+
+    if eta_sec is not None and eta_sec > 0:
+        line += f" | 남은 예상: {format_elapsed_time(eta_sec)}"
+
     sys.stdout.write(line)
     sys.stdout.flush()
 
     if done_sec >= total_sec:
         sys.stdout.write("\n")
         sys.stdout.flush()
+
+
+def format_elapsed_time(seconds):
+    seconds = max(0, int(seconds))
+    hours, remainder = divmod(seconds, 3600)
+    minutes, secs = divmod(remainder, 60)
+
+    if hours > 0:
+        return f"{hours:02d}시간 {minutes:02d}분 {secs:02d}초"
+    if minutes > 0:
+        return f"{minutes:02d}분 {secs:02d}초"
+    return f"{secs:02d}초"
 
 
 def _run_command(cmd):
@@ -189,10 +213,97 @@ def _build_output_file(audio_file, backend_name, model_size):
     output_dir = get_output_dir()
     base_name = os.path.splitext(os.path.basename(audio_file))[0]
     timestamp = datetime.now().strftime("%y%m%d-%H%M%S")
-    return os.path.join(
-        output_dir,
-        f"{base_name}_{backend_name}_{model_size}_{timestamp}.srt",
+    return os.path.join(output_dir, f"{base_name}-{timestamp}.srt")
+
+
+def _parse_srt_blocks(srt_path):
+    with open(srt_path, "r", encoding="utf-8") as srt_file:
+        raw_content = srt_file.read().strip()
+
+    if not raw_content:
+        return []
+
+    blocks = []
+    for raw_block in raw_content.split("\n\n"):
+        lines = [line.strip() for line in raw_block.splitlines() if line.strip()]
+        if len(lines) < 3 or "-->" not in lines[1]:
+            continue
+
+        time_range = lines[1]
+        start_text, end_text = [part.strip() for part in time_range.split("-->")]
+        start_sec = _srt_timestamp_to_seconds(start_text)
+        end_sec = _srt_timestamp_to_seconds(end_text)
+        text_lines = lines[2:]
+
+        if not text_lines:
+            continue
+
+        blocks.append(
+            {
+                "start_sec": start_sec,
+                "end_sec": end_sec,
+                "text": "\n".join(text_lines),
+            }
+        )
+
+    return blocks
+
+
+def _srt_timestamp_to_seconds(timestamp_text):
+    hours, minutes, seconds_ms = timestamp_text.split(":")
+    seconds, milliseconds = seconds_ms.split(",")
+    return (
+        int(hours) * 3600
+        + int(minutes) * 60
+        + int(seconds)
+        + int(milliseconds) / 1000
     )
+
+
+def _format_txt_timeline(seconds, use_hour_format):
+    total_seconds = int(seconds)
+    hours, remainder = divmod(total_seconds, 3600)
+    minutes, secs = divmod(remainder, 60)
+
+    if use_hour_format:
+        return f"{hours}:{minutes:02d}:{secs:02d}"
+    return f"{minutes:02d}:{secs:02d}"
+
+
+def convert_srt_to_txt(srt_path):
+    if not srt_path:
+        raise ValueError("SRT 파일 경로가 비어 있습니다.")
+
+    srt_path = os.path.abspath(srt_path)
+    if not os.path.isfile(srt_path):
+        raise FileNotFoundError(f"SRT 파일을 찾을 수 없습니다: {srt_path}")
+
+    blocks = _parse_srt_blocks(srt_path)
+    if not blocks:
+        raise ValueError("변환할 자막 내용이 없습니다.")
+
+    total_duration = max(block["end_sec"] for block in blocks)
+    use_hour_format = total_duration >= 3600
+    output_path = os.path.splitext(srt_path)[0] + ".txt"
+
+    minute_buckets = {}
+    for block in blocks:
+        minute_mark = int(block["start_sec"] // 60) * 60
+        minute_buckets.setdefault(minute_mark, []).append(block)
+
+    ordered_minutes = sorted(minute_buckets.keys())
+
+    with open(output_path, "w", encoding="utf-8") as txt_file:
+        for minute_index, minute_mark in enumerate(ordered_minutes):
+            if minute_index > 0:
+                txt_file.write("\n")
+
+            txt_file.write(_format_txt_timeline(minute_mark, use_hour_format) + "\n\n")
+
+            for block in reversed(minute_buckets[minute_mark]):
+                txt_file.write(block["text"] + "\n\n")
+
+    return output_path
 
 
 def _write_srt_segment(srt_file, index, start_sec, end_sec, text):
@@ -259,7 +370,19 @@ def _transcribe_with_mlx(
 
             done_sec = min(chunk_start + chunk_duration, total_duration)
             elapsed = time.perf_counter() - start_time
-            progress(done_sec, total_duration, chunk_idx + 1, total_chunks, elapsed)
+            completed_chunks = chunk_idx + 1
+            avg_chunk_time = elapsed / completed_chunks if completed_chunks else 0
+            remaining_chunks = max(0, total_chunks - completed_chunks)
+            eta_sec = avg_chunk_time * remaining_chunks
+            progress(
+                done_sec,
+                total_duration,
+                completed_chunks,
+                total_chunks,
+                elapsed,
+                eta_sec=eta_sec,
+                avg_chunk_time=avg_chunk_time,
+            )
 
 
 def _transcribe_with_faster_whisper(
@@ -303,10 +426,26 @@ def _transcribe_with_faster_whisper(
 
             elapsed = time.perf_counter() - start_time
             done_sec = min(float(seg.end), detected_duration)
-            progress(done_sec, detected_duration, 1, total_chunks, elapsed)
+            progress(
+                done_sec,
+                detected_duration,
+                1,
+                total_chunks,
+                elapsed,
+                eta_sec=max(0, detected_duration - done_sec),
+                avg_chunk_time=None,
+            )
 
     elapsed = time.perf_counter() - start_time
-    progress(detected_duration, detected_duration, 1, total_chunks, elapsed)
+    progress(
+        detected_duration,
+        detected_duration,
+        1,
+        total_chunks,
+        elapsed,
+        eta_sec=0,
+        avg_chunk_time=None,
+    )
 
 
 def transcribe_to_srt(

@@ -2,78 +2,110 @@ import os
 import queue
 import subprocess
 import threading
+import time
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-from transcribe_mlx import get_output_dir, transcribe_to_srt
+from transcribe_mlx import (
+    convert_srt_to_txt,
+    format_elapsed_time,
+    get_output_dir,
+    transcribe_to_srt,
+)
 
 
 class TranscriberApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("MLX Transcriber MVP")
-        self.root.geometry("720x320")
+        self.root.title("MyTranscriber")
+        self.root.geometry("760x560")
         self.root.resizable(False, False)
 
         self.selected_file = ""
         self.output_file = ""
+        self.txt_output_file = ""
+        self.is_transcribing = False
         self.worker_thread = None
         self.event_queue = queue.Queue()
 
         self.file_var = tk.StringVar(value="선택된 파일이 없습니다.")
-        self.status_var = tk.StringVar(value="대기 중")
-        self.result_var = tk.StringVar(value="아직 생성된 SRT 파일이 없습니다.")
+        self.status_var = tk.StringVar(
+            value="파일을 선택하면 변환을 시작할 수 있습니다."
+        )
+        self.txt_result_var = tk.StringVar(value="아직 변환된 txt 파일이 없습니다.")
+
+        self.transcription_started_at = None
+        self.last_progress = {
+            "progress_percent": 0.0,
+            "elapsed_sec": 0,
+            "eta_sec": None,
+            "expected_total_sec": None,
+            "avg_chunk_time": None,
+            "chunk_idx": 0,
+            "total_chunks": 0,
+        }
 
         self._build_ui()
+        self._refresh_button_states()
         self.root.after(100, self._poll_events)
+        self.root.after(1000, self._tick_status)
 
     def _build_ui(self):
-        container = ttk.Frame(self.root, padding=20)
+        style = ttk.Style()
+        style.configure("Section.TFrame", padding=18)
+        style.configure("Info.TLabel", font=("Helvetica", 12), wraplength=640)
+
+        container = ttk.Frame(self.root, padding=24)
         container.pack(fill="both", expand=True)
 
-        ttk.Label(container, text="선택 파일").pack(anchor="w")
         ttk.Label(
             container,
-            textvariable=self.file_var,
-            wraplength=660,
-            justify="left",
-        ).pack(fill="x", pady=(4, 16))
+            text="간단한 자막 변환기",
+            font=("Helvetica", 20, "bold"),
+        ).pack(anchor="center", pady=(0, 20))
 
-        button_row = ttk.Frame(container)
-        button_row.pack(fill="x", pady=(0, 16))
-
-        self.select_button = ttk.Button(
-            button_row, text="1. 음성/영상 파일 선택", command=self.select_file
-        )
-        self.select_button.pack(side="left", padx=(0, 8))
-
-        self.start_button = ttk.Button(
-            button_row, text="2. 변환 시작", command=self.start_transcription
-        )
-        self.start_button.pack(side="left", padx=(0, 8))
-
-        self.open_button = ttk.Button(
-            button_row,
-            text="3. 출력 폴더 열기",
-            command=self.open_output_folder,
-        )
-        self.open_button.pack(side="left")
-
-        ttk.Label(container, text="상태").pack(anchor="w")
-        ttk.Label(
+        self.select_button = self._create_action_section(
             container,
-            textvariable=self.status_var,
-            wraplength=660,
-            justify="left",
-        ).pack(fill="x", pady=(4, 16))
-
-        ttk.Label(container, text="생성된 SRT").pack(anchor="w")
-        ttk.Label(
+            "1. 음성/영상 파일 선택",
+            self.select_file,
+            self.file_var,
+        )
+        self.start_button = self._create_action_section(
             container,
-            textvariable=self.result_var,
-            wraplength=660,
+            "2. 자막 변환 시작",
+            self.handle_second_button,
+            self.status_var,
+        )
+        self.txt_button = self._create_action_section(
+            container,
+            "3. txt 파일로 변환",
+            self.handle_third_button,
+            self.txt_result_var,
+        )
+
+    def _create_action_section(self, parent, button_text, command, text_variable):
+        section = ttk.Frame(parent, style="Section.TFrame")
+        section.pack(fill="x", pady=10)
+
+        button = tk.Button(
+            section,
+            text=button_text,
+            command=command,
+            font=("Helvetica", 16, "bold"),
+            height=2,
+            relief="ridge",
+            bd=2,
+        )
+        button.pack(fill="x")
+
+        ttk.Label(
+            section,
+            textvariable=text_variable,
+            style="Info.TLabel",
             justify="left",
-        ).pack(fill="x", pady=(4, 0))
+        ).pack(fill="x", pady=(12, 0))
+
+        return button
 
     def select_file(self):
         file_path = filedialog.askopenfilename(
@@ -88,9 +120,12 @@ class TranscriberApp:
 
         self.selected_file = file_path
         self.output_file = ""
+        self.txt_output_file = ""
+        self.is_transcribing = False
         self.file_var.set(file_path)
-        self.status_var.set("파일이 선택되었습니다. 변환을 시작할 수 있습니다.")
-        self.result_var.set("아직 생성된 SRT 파일이 없습니다.")
+        self.status_var.set("파일 선택 완료. 변환 시작 버튼을 눌러주세요.")
+        self.txt_result_var.set("아직 변환된 txt 파일이 없습니다.")
+        self._refresh_button_states()
 
     def start_transcription(self):
         if self.worker_thread and self.worker_thread.is_alive():
@@ -98,12 +133,25 @@ class TranscriberApp:
             return
 
         if not self.selected_file:
-            messagebox.showwarning("파일 필요", "먼저 음성 또는 영상 파일을 선택해주세요.")
+            messagebox.showwarning(
+                "파일 필요", "먼저 음성 또는 영상 파일을 선택해주세요."
+            )
             return
 
+        self.transcription_started_at = time.perf_counter()
+        self.last_progress = {
+            "progress_percent": 0.0,
+            "elapsed_sec": 0,
+            "eta_sec": None,
+            "expected_total_sec": None,
+            "avg_chunk_time": None,
+            "chunk_idx": 0,
+            "total_chunks": 0,
+        }
         self.status_var.set("변환 준비 중...")
-        self.result_var.set("변환이 끝나면 여기에 SRT 경로가 표시됩니다.")
-        self._set_busy_state(True)
+        self.is_transcribing = True
+        self.txt_result_var.set("SRT 생성 후 txt 변환이 가능합니다.")
+        self._refresh_button_states(is_busy=True)
 
         self.worker_thread = threading.Thread(
             target=self._run_transcription,
@@ -113,15 +161,34 @@ class TranscriberApp:
 
     def _run_transcription(self):
         def log_callback(message):
-            self.event_queue.put(("status", message))
+            self.event_queue.put(("log", message))
 
-        def progress_callback(done_sec, total_sec, chunk_idx, total_chunks, elapsed_sec):
-            progress = (done_sec / total_sec * 100) if total_sec else 0
-            message = (
-                f"변환 중... {progress:5.1f}% "
-                f"({chunk_idx}/{total_chunks} chunk, {int(elapsed_sec)}초 경과)"
+        def progress_callback(
+            done_sec,
+            total_sec,
+            chunk_idx,
+            total_chunks,
+            elapsed_sec,
+            eta_sec=None,
+            avg_chunk_time=None,
+        ):
+            progress_percent = (done_sec / total_sec * 100) if total_sec else 0
+            self.event_queue.put(
+                (
+                    "progress",
+                    {
+                        "progress_percent": progress_percent,
+                        "elapsed_sec": elapsed_sec,
+                        "eta_sec": eta_sec,
+                        "expected_total_sec": (
+                            elapsed_sec + eta_sec if eta_sec is not None else None
+                        ),
+                        "avg_chunk_time": avg_chunk_time,
+                        "chunk_idx": chunk_idx,
+                        "total_chunks": total_chunks,
+                    },
+                )
             )
-            self.event_queue.put(("status", message))
 
         try:
             output_file = transcribe_to_srt(
@@ -138,23 +205,64 @@ class TranscriberApp:
         while not self.event_queue.empty():
             event_type, payload = self.event_queue.get()
 
-            if event_type == "status":
-                self.status_var.set(payload)
+            if event_type == "progress":
+                self.last_progress.update(payload)
+                self._update_status_text()
+            elif event_type == "log":
+                if payload.startswith("백엔드:"):
+                    self.status_var.set(payload)
             elif event_type == "success":
                 self.output_file = payload
-                self.status_var.set("변환이 완료되었습니다.")
-                self.result_var.set(payload)
-                self._set_busy_state(False)
+                elapsed_sec = 0
+                if self.transcription_started_at is not None:
+                    elapsed_sec = time.perf_counter() - self.transcription_started_at
+                self.is_transcribing = False
+                self.status_var.set(
+                    f"변환 완료. 총 소요 시간: {format_elapsed_time(elapsed_sec)}"
+                )
+                self.txt_output_file = ""
+                self.txt_result_var.set("이제 txt 파일로 변환할 수 있습니다.")
+                self.transcription_started_at = None
+                self._refresh_button_states(is_busy=False)
             elif event_type == "error":
+                self.is_transcribing = False
                 self.status_var.set("변환 중 오류가 발생했습니다.")
-                self.result_var.set("생성된 SRT 파일이 없습니다.")
-                self._set_busy_state(False)
+                self.txt_result_var.set("아직 변환된 txt 파일이 없습니다.")
+                self.transcription_started_at = None
+                self._refresh_button_states(is_busy=False)
                 messagebox.showerror("변환 실패", payload)
 
         self.root.after(100, self._poll_events)
 
-    def open_output_folder(self):
-        target_path = self.output_file or get_output_dir()
+    def _tick_status(self):
+        if (
+            self.transcription_started_at
+            and self.worker_thread
+            and self.worker_thread.is_alive()
+        ):
+            elapsed_sec = time.perf_counter() - self.transcription_started_at
+            self.last_progress["elapsed_sec"] = elapsed_sec
+            expected_total_sec = self.last_progress.get("expected_total_sec")
+            if expected_total_sec is not None:
+                self.last_progress["eta_sec"] = max(0, expected_total_sec - elapsed_sec)
+            self._update_status_text()
+
+        self.root.after(1000, self._tick_status)
+
+    def _update_status_text(self):
+        progress = self.last_progress["progress_percent"]
+        elapsed_text = format_elapsed_time(self.last_progress["elapsed_sec"])
+
+        parts = [f"진행률 {progress:5.1f}%", f"경과 시간 {elapsed_text}"]
+
+        eta_sec = self.last_progress["eta_sec"]
+        if eta_sec is not None and eta_sec > 0:
+            parts.append(f"예상 남은 시간 {format_elapsed_time(eta_sec)}")
+
+        self.status_var.set(" | ".join(parts))
+
+    def _open_target_folder(self, target_path):
+        target_path = target_path or get_output_dir()
 
         folder_path = (
             target_path if os.path.isdir(target_path) else os.path.dirname(target_path)
@@ -166,11 +274,52 @@ class TranscriberApp:
         except Exception as exc:
             messagebox.showerror("폴더 열기 실패", str(exc))
 
-    def _set_busy_state(self, is_busy):
-        button_state = tk.DISABLED if is_busy else tk.NORMAL
-        self.select_button.config(state=button_state)
-        self.start_button.config(state=button_state)
-        self.open_button.config(state=tk.NORMAL)
+    def handle_second_button(self):
+        if self.output_file and not self.is_transcribing:
+            self._open_target_folder(self.output_file)
+            return
+
+        self.start_transcription()
+
+    def convert_latest_srt_to_txt(self):
+        if not self.output_file:
+            messagebox.showwarning("SRT 필요", "먼저 SRT 파일을 생성해주세요.")
+            return
+
+        try:
+            self.txt_output_file = convert_srt_to_txt(self.output_file)
+            self.txt_result_var.set("변환 완료")
+            self._refresh_button_states()
+        except Exception as exc:
+            messagebox.showerror("txt 변환 실패", str(exc))
+
+    def handle_third_button(self):
+        if self.txt_output_file and not self.is_transcribing:
+            self._open_target_folder(self.txt_output_file)
+            return
+
+        self.convert_latest_srt_to_txt()
+
+    def _refresh_button_states(self, is_busy=False):
+        self.select_button.config(state=tk.DISABLED if is_busy else tk.NORMAL)
+        start_state = tk.NORMAL if self.selected_file and not is_busy else tk.DISABLED
+        self.start_button.config(
+            state=start_state,
+            text=(
+                "2. 자막 폴더 열기"
+                if self.output_file and not is_busy
+                else "2. 자막 변환 시작"
+            ),
+        )
+        txt_state = tk.NORMAL if self.output_file and not is_busy else tk.DISABLED
+        self.txt_button.config(state=txt_state)
+        self.txt_button.config(
+            text=(
+                "3. txt 폴더 열기"
+                if self.txt_output_file and not is_busy
+                else "3. txt 파일로 변환"
+            )
+        )
 
 
 def main():
