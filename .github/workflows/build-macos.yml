@@ -1,0 +1,44 @@
+name: Build macOS Apps
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build:
+    name: Build ${{ matrix.label }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-14
+            label: arm64
+          - runner: macos-13
+            label: intel
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Install ffmpeg
+        run: brew install ffmpeg
+
+      - name: Create virtualenv
+        run: python -m venv .venv
+
+      - name: Build app
+        run: ./build_macos_app.sh
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MyTranscriber-macos-${{ matrix.label }}
+          path: release/MyTranscriber-macos-${{ matrix.label }}.zip

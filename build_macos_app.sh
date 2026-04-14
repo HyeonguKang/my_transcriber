@@ -1,8 +1,26 @@
 #!/bin/zsh
-set -e
+set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
+
+APP_NAME="MyTranscriber"
+ARCH_RAW="$(uname -m)"
+
+case "$ARCH_RAW" in
+  arm64|aarch64)
+    ARCH_LABEL="arm64"
+    ;;
+  x86_64)
+    ARCH_LABEL="intel"
+    ;;
+  *)
+    echo "지원하지 않는 아키텍처입니다: $ARCH_RAW"
+    exit 1
+    ;;
+esac
+
+ZIP_NAME="${APP_NAME}-macos-${ARCH_LABEL}.zip"
 
 if [[ ! -d ".venv" ]]; then
   echo ".venv 가 없습니다. 먼저 가상환경을 만들어주세요."
@@ -15,18 +33,24 @@ python -m pip install --upgrade pip
 python -m pip install -r requirements.txt -r requirements-build.txt
 
 if ! command -v ffmpeg >/dev/null 2>&1; then
-  echo "ffmpeg를 찾을 수 없습니다. `brew install ffmpeg` 후 다시 시도해주세요."
+  echo "ffmpeg를 찾을 수 없습니다. brew install ffmpeg 후 다시 시도해주세요."
   exit 1
 fi
 
 if ! command -v ffprobe >/dev/null 2>&1; then
-  echo "ffprobe를 찾을 수 없습니다. `brew install ffmpeg` 후 다시 시도해주세요."
+  echo "ffprobe를 찾을 수 없습니다. brew install ffmpeg 후 다시 시도해주세요."
   exit 1
 fi
 
-command rm -rf build dist
+command rm -rf build dist release .pycache __pycache__
+
 pyinstaller --clean MyTranscriber.spec
+
+mkdir -p release
+ditto -c -k --sequesterRsrc --keepParent "dist/${APP_NAME}.app" "release/${ZIP_NAME}"
 
 echo ""
 echo "빌드 완료:"
-echo "  $SCRIPT_DIR/dist/MyTranscriber.app"
+echo "  앱:  $SCRIPT_DIR/dist/${APP_NAME}.app"
+echo "  압축: $SCRIPT_DIR/release/${ZIP_NAME}"
+echo "  아키텍처: ${ARCH_LABEL}"

@@ -19,9 +19,7 @@ brew install ffmpeg
 python gui_app.py
 ```
 
-## macOS 앱으로 빌드
-
-최종 사용자가 Python을 설치하지 않아도 되게 하려면 `.app`으로 묶어 배포하면 됩니다.
+## 로컬 앱 빌드
 
 ```bash
 python3 -m venv .venv
@@ -29,17 +27,26 @@ source .venv/bin/activate
 ./build_macos_app.sh
 ```
 
-빌드가 끝나면 아래 앱이 생성됩니다.
+빌드가 끝나면 현재 머신 아키텍처에 맞는 이름으로 압축 파일이 생성됩니다.
 
-```bash
-dist/MyTranscriber.app
-```
+- Apple Silicon: `release/MyTranscriber-macos-arm64.zip`
+- Intel Mac: `release/MyTranscriber-macos-intel.zip`
 
-## 아키텍처 배포 메모
+## 멀티 아키텍처 배포 전략
 
-- Apple Silicon에서 빌드한 앱은 기본적으로 Apple Silicon용입니다.
-- Intel Mac에서 배포하려면 Intel Mac에서 별도로 빌드하는 것이 가장 안전합니다.
-- 즉, 배포용 앱은 보통 `macos-arm64`, `macos-intel` 두 개를 따로 만드는 방식이 현실적입니다.
+- Apple Silicon에서 빌드하면 `arm64` 배포본이 생성됩니다.
+- Intel Mac에서 빌드하면 `intel` 배포본이 생성됩니다.
+- 두 아키텍처를 모두 배포하려면 보통 두 환경에서 각각 한 번씩 빌드합니다.
+
+## GitHub Actions CI
+
+저장소에는 macOS CI 워크플로도 포함되어 있습니다.
+
+- [`build-macos.yml`](/Users/hyeongu/Documents/my_transcriber/.github/workflows/build-macos.yml:1)
+- `macos-14`에서 `arm64`
+- `macos-13`에서 `intel`
+
+태그 푸시(`v*`) 또는 수동 실행으로 두 아키텍처 아티팩트를 자동 생성할 수 있습니다.
 
 ## 저장 위치
 
