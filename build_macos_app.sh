@@ -6,6 +6,7 @@ cd "$SCRIPT_DIR"
 
 APP_NAME="MyTranscriber"
 ARCH_RAW="$(uname -m)"
+RELEASE_VERSION="${RELEASE_VERSION:-}"
 
 case "$ARCH_RAW" in
   arm64|aarch64)
@@ -20,7 +21,11 @@ case "$ARCH_RAW" in
     ;;
 esac
 
-ZIP_NAME="${APP_NAME}-macos-${ARCH_LABEL}.zip"
+if [[ -n "$RELEASE_VERSION" ]]; then
+  ZIP_NAME="${APP_NAME}-${RELEASE_VERSION}-macos-${ARCH_LABEL}.zip"
+else
+  ZIP_NAME="${APP_NAME}-macos-${ARCH_LABEL}.zip"
+fi
 PYTHON_REQUIREMENTS=("requirements.txt")
 
 if [[ "$ARCH_LABEL" == "arm64" ]]; then

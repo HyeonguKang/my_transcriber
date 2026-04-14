@@ -439,13 +439,22 @@ def _transcribe_with_faster_whisper(
 
             elapsed = time.perf_counter() - start_time
             done_sec = min(float(seg.end), detected_duration)
+            progress_ratio = (done_sec / detected_duration) if detected_duration else 0
+            expected_total_sec = (
+                elapsed / progress_ratio if progress_ratio > 0 else None
+            )
+            eta_sec = (
+                max(0, expected_total_sec - elapsed)
+                if expected_total_sec is not None
+                else None
+            )
             progress(
                 done_sec,
                 detected_duration,
                 1,
                 total_chunks,
                 elapsed,
-                eta_sec=max(0, detected_duration - done_sec),
+                eta_sec=eta_sec,
                 avg_chunk_time=None,
             )
 

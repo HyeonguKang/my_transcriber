@@ -38,16 +38,18 @@ jobs:
         run: python -m venv .venv
 
       - name: Build app
+        env:
+          RELEASE_VERSION: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '' }}
         run: ./build_macos_app.sh
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: MyTranscriber-macos-${{ matrix.label }}
-          path: release/MyTranscriber-macos-${{ matrix.label }}.zip
+          name: ${{ startsWith(github.ref, 'refs/tags/v') && format('MyTranscriber-{0}-macos-{1}', github.ref_name, matrix.label) || format('MyTranscriber-macos-{0}', matrix.label) }}
+          path: ${{ startsWith(github.ref, 'refs/tags/v') && format('release/MyTranscriber-{0}-macos-{1}.zip', github.ref_name, matrix.label) || format('release/MyTranscriber-macos-{0}.zip', matrix.label) }}
 
       - name: Upload release asset
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: release/MyTranscriber-macos-${{ matrix.label }}.zip
+          files: release/MyTranscriber-${{ github.ref_name }}-macos-${{ matrix.label }}.zip
