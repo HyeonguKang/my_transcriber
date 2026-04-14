@@ -15,6 +15,7 @@ macOS에서 음성/영상 파일을 SRT 자막으로 변환하는 간단한 GUI 
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install -r requirements.txt
+python -m pip install -r requirements-apple-silicon.txt  # Apple Silicon only
 brew install ffmpeg
 python gui_app.py
 ```
@@ -37,6 +38,7 @@ source .venv/bin/activate
 - Apple Silicon에서 빌드하면 `arm64` 배포본이 생성됩니다.
 - Intel Mac에서 빌드하면 `intel` 배포본이 생성됩니다.
 - 두 아키텍처를 모두 배포하려면 보통 두 환경에서 각각 한 번씩 빌드합니다.
+- 공통 의존성은 `requirements.txt`, Apple Silicon 전용 의존성은 `requirements-apple-silicon.txt`에 분리되어 있습니다.
 
 ## GitHub Actions CI
 

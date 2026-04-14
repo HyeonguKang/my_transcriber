@@ -21,6 +21,11 @@ case "$ARCH_RAW" in
 esac
 
 ZIP_NAME="${APP_NAME}-macos-${ARCH_LABEL}.zip"
+PYTHON_REQUIREMENTS=("requirements.txt")
+
+if [[ "$ARCH_LABEL" == "arm64" ]]; then
+  PYTHON_REQUIREMENTS+=("requirements-apple-silicon.txt")
+fi
 
 if [[ ! -d ".venv" ]]; then
   echo ".venv 가 없습니다. 먼저 가상환경을 만들어주세요."
@@ -30,7 +35,12 @@ fi
 source .venv/bin/activate
 
 python -m pip install --upgrade pip
-python -m pip install -r requirements.txt -r requirements-build.txt
+
+for requirement_file in "${PYTHON_REQUIREMENTS[@]}"; do
+  python -m pip install -r "$requirement_file"
+done
+
+python -m pip install -r requirements-build.txt
 
 if ! command -v ffmpeg >/dev/null 2>&1; then
   echo "ffmpeg를 찾을 수 없습니다. brew install ffmpeg 후 다시 시도해주세요."
