@@ -2,6 +2,7 @@ import json
 import math
 import os
 import platform
+import re
 import subprocess
 import sys
 import tempfile
@@ -270,7 +271,16 @@ def _format_txt_timeline(seconds, use_hour_format):
     return f"{minutes:02d}:{secs:02d}"
 
 
-def convert_srt_to_txt(srt_path):
+def build_timestamped_txt_output_path(srt_path):
+    srt_path = os.path.abspath(srt_path)
+    directory = os.path.dirname(srt_path)
+    base_name = os.path.splitext(os.path.basename(srt_path))[0]
+    normalized_base_name = re.sub(r"-\d{6}-\d{6}$", "", base_name)
+    timestamp = datetime.now().strftime("%y%m%d-%H%M%S")
+    return os.path.join(directory, f"{normalized_base_name}-{timestamp}.txt")
+
+
+def convert_srt_to_txt(srt_path, output_path=None):
     if not srt_path:
         raise ValueError("SRT 파일 경로가 비어 있습니다.")
 
@@ -284,7 +294,10 @@ def convert_srt_to_txt(srt_path):
 
     total_duration = max(block["end_sec"] for block in blocks)
     use_hour_format = total_duration >= 3600
-    output_path = os.path.splitext(srt_path)[0] + ".txt"
+    if output_path is None:
+        output_path = os.path.splitext(srt_path)[0] + ".txt"
+    else:
+        output_path = os.path.abspath(output_path)
 
     minute_buckets = {}
     for block in blocks:
@@ -300,7 +313,7 @@ def convert_srt_to_txt(srt_path):
 
             txt_file.write(_format_txt_timeline(minute_mark, use_hour_format) + "\n\n")
 
-            for block in reversed(minute_buckets[minute_mark]):
+            for block in minute_buckets[minute_mark]:
                 txt_file.write(block["text"] + "\n\n")
 
     return output_path

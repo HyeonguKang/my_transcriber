@@ -7,6 +7,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
 from transcribe_mlx import (
+    build_timestamped_txt_output_path,
     convert_srt_to_txt,
     format_elapsed_time,
     get_output_dir,
@@ -32,7 +33,9 @@ class TranscriberApp:
         self.status_var = tk.StringVar(
             value="파일을 선택하면 변환을 시작할 수 있습니다."
         )
-        self.txt_result_var = tk.StringVar(value="아직 변환된 txt 파일이 없습니다.")
+        self.txt_result_var = tk.StringVar(
+            value="버튼 클릭 후 txt 파일로 변환할 자막을 선택할 수 있습니다."
+        )
 
         self.transcription_started_at = None
         self.last_progress = {
@@ -124,7 +127,7 @@ class TranscriberApp:
         self.is_transcribing = False
         self.file_var.set(file_path)
         self.status_var.set("파일 선택 완료. 변환 시작 버튼을 눌러주세요.")
-        self.txt_result_var.set("아직 변환된 txt 파일이 없습니다.")
+        self.txt_result_var.set("변환이 끝나면 txt 파일로 변환할 수 있습니다.")
         self._refresh_button_states()
 
     def start_transcription(self):
@@ -227,7 +230,9 @@ class TranscriberApp:
             elif event_type == "error":
                 self.is_transcribing = False
                 self.status_var.set("변환 중 오류가 발생했습니다.")
-                self.txt_result_var.set("아직 변환된 txt 파일이 없습니다.")
+                self.txt_result_var.set(
+                    "버튼 클릭 후 txt 파일로 변환할 자막을 선택할 수 있습니다."
+                )
                 self.transcription_started_at = None
                 self._refresh_button_states(is_busy=False)
                 messagebox.showerror("변환 실패", payload)
@@ -281,17 +286,25 @@ class TranscriberApp:
 
         self.start_transcription()
 
-    def convert_latest_srt_to_txt(self):
-        if not self.output_file:
-            messagebox.showwarning("SRT 필요", "먼저 SRT 파일을 생성해주세요.")
-            return
-
+    def _convert_srt_path_to_txt(self, srt_path, output_path=None):
         try:
-            self.txt_output_file = convert_srt_to_txt(self.output_file)
-            self.txt_result_var.set("변환 완료")
-            self._refresh_button_states()
+            return convert_srt_to_txt(srt_path, output_path=output_path)
         except Exception as exc:
             messagebox.showerror("txt 변환 실패", str(exc))
+            return None
+
+    def convert_latest_srt_to_txt(self):
+        if not self.output_file:
+            self.convert_selected_srt_to_txt()
+            return
+
+        converted_path = self._convert_srt_path_to_txt(self.output_file)
+        if not converted_path:
+            return
+
+        self.txt_output_file = converted_path
+        self.txt_result_var.set("변환 완료")
+        self._refresh_button_states()
 
     def handle_third_button(self):
         if self.txt_output_file and not self.is_transcribing:
@@ -299,6 +312,23 @@ class TranscriberApp:
             return
 
         self.convert_latest_srt_to_txt()
+
+    def convert_selected_srt_to_txt(self):
+        srt_path = filedialog.askopenfilename(
+            title="자막 파일 선택",
+            filetypes=[("SRT Files", "*.srt"), ("All Files", "*.*")],
+        )
+        if not srt_path:
+            return
+
+        output_path = build_timestamped_txt_output_path(srt_path)
+        converted_path = self._convert_srt_path_to_txt(srt_path, output_path=output_path)
+        if not converted_path:
+            return
+
+        self.txt_output_file = converted_path
+        self.txt_result_var.set("변환 완료")
+        self._refresh_button_states()
 
     def _refresh_button_states(self, is_busy=False):
         self.select_button.config(state=tk.DISABLED if is_busy else tk.NORMAL)
@@ -311,7 +341,7 @@ class TranscriberApp:
                 else "2. 자막 변환 시작"
             ),
         )
-        txt_state = tk.NORMAL if self.output_file and not is_busy else tk.DISABLED
+        txt_state = tk.NORMAL if not is_busy else tk.DISABLED
         self.txt_button.config(state=txt_state)
         self.txt_button.config(
             text=(
