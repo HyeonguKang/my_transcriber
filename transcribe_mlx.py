@@ -3,6 +3,7 @@ import math
 import os
 import platform
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -141,8 +142,16 @@ def find_binary(binary_name):
     for candidate in _candidate_binary_paths(binary_name):
         if os.path.isabs(candidate) and os.path.exists(candidate):
             return os.path.abspath(candidate)
-        if os.path.sep not in candidate:
+
+    resolved = shutil.which(binary_name)
+    if resolved:
+        return resolved
+
+    for prefix in ("/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"):
+        candidate = os.path.join(prefix, binary_name)
+        if os.path.exists(candidate):
             return candidate
+
     return binary_name
 
 
