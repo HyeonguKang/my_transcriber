@@ -14,6 +14,7 @@ LANGUAGE = "ko"
 CHUNK_SECONDS = 30
 DEFAULT_MODEL_SIZE = "large"
 DEFAULT_COMPUTE_TYPE = "int8"
+_BINARY_CACHE = {}
 
 
 def format_korean_time(seconds):
@@ -120,6 +121,15 @@ def get_output_dir():
 
 def _candidate_binary_paths(binary_name):
     candidates = []
+    module_dir = os.path.dirname(os.path.abspath(__file__))
+
+    candidates.extend(
+        [
+            os.path.join(module_dir, binary_name),
+            os.path.join(module_dir, "..", "Resources", binary_name),
+            os.path.join(module_dir, "..", "Frameworks", binary_name),
+        ]
+    )
 
     if getattr(sys, "frozen", False):
         meipass = getattr(sys, "_MEIPASS", "")
@@ -139,19 +149,27 @@ def _candidate_binary_paths(binary_name):
 
 
 def find_binary(binary_name):
+    if binary_name in _BINARY_CACHE:
+        return _BINARY_CACHE[binary_name]
+
     for candidate in _candidate_binary_paths(binary_name):
         if os.path.isabs(candidate) and os.path.exists(candidate):
-            return os.path.abspath(candidate)
+            resolved = os.path.abspath(candidate)
+            _BINARY_CACHE[binary_name] = resolved
+            return resolved
 
     resolved = shutil.which(binary_name)
     if resolved:
+        _BINARY_CACHE[binary_name] = resolved
         return resolved
 
     for prefix in ("/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"):
         candidate = os.path.join(prefix, binary_name)
         if os.path.exists(candidate):
+            _BINARY_CACHE[binary_name] = candidate
             return candidate
 
+    _BINARY_CACHE[binary_name] = binary_name
     return binary_name
 
 
