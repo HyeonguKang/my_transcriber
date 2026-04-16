@@ -1,12 +1,16 @@
 import os
+import multiprocessing
 import queue
 import subprocess
+import sys
 import threading
 import time
+import traceback
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
 from transcribe_mlx import (
+    append_debug_log,
     build_timestamped_txt_output_path,
     convert_srt_to_txt,
     format_elapsed_time,
@@ -163,6 +167,10 @@ class TranscriberApp:
         self.worker_thread.start()
 
     def _run_transcription(self):
+        append_debug_log(
+            f"transcription_start: selected_file={self.selected_file} pid={os.getpid()}"
+        )
+
         def log_callback(message):
             self.event_queue.put(("log", message))
 
@@ -202,6 +210,7 @@ class TranscriberApp:
             )
             self.event_queue.put(("success", output_file))
         except Exception as exc:
+            append_debug_log("transcription_exception:\n" + traceback.format_exc())
             self.event_queue.put(("error", str(exc)))
 
     def _poll_events(self):
@@ -353,6 +362,10 @@ class TranscriberApp:
 
 
 def main():
+    multiprocessing.freeze_support()
+    append_debug_log(
+        f"gui_main_start: pid={os.getpid()} executable={sys.executable if 'sys' in globals() else 'unknown'}"
+    )
     root = tk.Tk()
     TranscriberApp(root)
     root.mainloop()

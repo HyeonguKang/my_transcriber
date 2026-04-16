@@ -1,5 +1,6 @@
 import json
 import math
+import multiprocessing
 import os
 import platform
 import re
@@ -8,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import traceback
 from datetime import datetime
 
 LANGUAGE = "ko"
@@ -53,6 +55,25 @@ def _default_logger(message):
     print(message)
 
 
+def get_log_dir():
+    log_dir = os.path.join(get_app_base_dir(), "logs")
+    os.makedirs(log_dir, exist_ok=True)
+    return log_dir
+
+
+def get_debug_log_path():
+    return os.path.join(get_log_dir(), "app-debug.log")
+
+
+def append_debug_log(message):
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    try:
+        with open(get_debug_log_path(), "a", encoding="utf-8") as log_file:
+            log_file.write(f"[{timestamp}] {message}\n")
+    except Exception:
+        pass
+
+
 def _default_progress(
     done_sec,
     total_sec,
@@ -93,18 +114,31 @@ def format_elapsed_time(seconds):
 
 
 def _run_command(cmd):
+    append_debug_log(f"run_command: {' '.join(cmd)}")
     try:
         return subprocess.run(cmd, capture_output=True, text=True, check=True)
     except FileNotFoundError as exc:
+        append_debug_log(
+            "file_not_found: "
+            + f"cmd0={cmd[0]} frozen={getattr(sys, 'frozen', False)} "
+            + f"executable={sys.executable} cwd={os.getcwd()}"
+        )
         raise RuntimeError(
             f"필수 명령어를 찾을 수 없습니다: {cmd[0]}. ffmpeg/ffprobe 설치를 확인해주세요."
         ) from exc
     except subprocess.CalledProcessError as exc:
         stderr = exc.stderr.strip() if exc.stderr else ""
+        append_debug_log(
+            "command_failed: "
+            + f"cmd={' '.join(cmd)} returncode={exc.returncode} stderr={stderr}"
+        )
         raise RuntimeError(
             f"명령 실행에 실패했습니다: {' '.join(cmd)}"
             + (f"\n{stderr}" if stderr else "")
         ) from exc
+    except Exception:
+        append_debug_log("run_command_unexpected:\n" + traceback.format_exc())
+        raise
 
 
 def get_app_base_dir():
@@ -156,21 +190,118 @@ def find_binary(binary_name):
         if os.path.isabs(candidate) and os.path.exists(candidate):
             resolved = os.path.abspath(candidate)
             _BINARY_CACHE[binary_name] = resolved
+            append_debug_log(f"find_binary({binary_name}) -> {resolved}")
             return resolved
 
     resolved = shutil.which(binary_name)
     if resolved:
         _BINARY_CACHE[binary_name] = resolved
+        append_debug_log(f"find_binary({binary_name}) -> {resolved}")
         return resolved
 
     for prefix in ("/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"):
         candidate = os.path.join(prefix, binary_name)
         if os.path.exists(candidate):
             _BINARY_CACHE[binary_name] = candidate
+            append_debug_log(f"find_binary({binary_name}) -> {candidate}")
             return candidate
 
     _BINARY_CACHE[binary_name] = binary_name
+    append_debug_log(
+        f"find_binary({binary_name}) -> fallback {binary_name}; "
+        + f"candidates={_candidate_binary_paths(binary_name)}"
+    )
     return binary_name
+
+
+def ensure_binary_dir_on_path(binary_name):
+    binary_path = find_binary(binary_name)
+    if not os.path.isabs(binary_path):
+        append_debug_log(
+            f"ensure_binary_dir_on_path({binary_name}) skipped: unresolved path {binary_path}"
+        )
+        return binary_path
+
+    binary_dir = os.path.dirname(binary_path)
+    current_path = os.environ.get("PATH", "")
+    path_entries = [entry for entry in current_path.split(os.pathsep) if entry]
+
+    if binary_dir not in path_entries:
+        os.environ["PATH"] = os.pathsep.join([binary_dir, *path_entries])
+        append_debug_log(
+            f"ensure_binary_dir_on_path({binary_name}) added {binary_dir} to PATH"
+        )
+    else:
+        append_debug_log(
+            f"ensure_binary_dir_on_path({binary_name}) already present: {binary_dir}"
+        )
+
+    return binary_path
+
+
+def _patch_mlx_whisper_ffmpeg():
+    ffmpeg_binary = ensure_binary_dir_on_path("ffmpeg")
+
+    try:
+        import mlx.core as mx
+        import numpy as np
+        import mlx_whisper.audio as mlx_audio
+    except Exception as exc:
+        raise RuntimeError(
+            "MLX 오디오 로더 초기화에 실패했습니다. MLX 설치 상태를 확인해주세요."
+        ) from exc
+
+    if getattr(mlx_audio, "_mytranscriber_ffmpeg_patch", False):
+        append_debug_log(
+            f"mlx_whisper audio already patched with ffmpeg={ffmpeg_binary}"
+        )
+        return
+
+    def _bundled_load_audio(
+        file: str = None,
+        sr: int = mlx_audio.SAMPLE_RATE,
+        from_stdin=False,
+    ):
+        if from_stdin:
+            cmd = [ffmpeg_binary, "-i", "pipe:0"]
+        else:
+            cmd = [ffmpeg_binary, "-nostdin", "-i", file]
+
+        cmd.extend(
+            [
+                "-threads",
+                "0",
+                "-f",
+                "s16le",
+                "-ac",
+                "1",
+                "-acodec",
+                "pcm_s16le",
+                "-ar",
+                str(sr),
+                "-",
+            ]
+        )
+        append_debug_log(f"mlx_whisper bundled load_audio uses {ffmpeg_binary}")
+
+        try:
+            out = subprocess.run(cmd, capture_output=True, check=True).stdout
+        except subprocess.CalledProcessError as exc:
+            stderr = exc.stderr.decode(errors="replace") if exc.stderr else ""
+            append_debug_log(
+                "mlx_whisper load_audio failed: "
+                + f"returncode={exc.returncode} stderr={stderr}"
+            )
+            raise RuntimeError(f"Failed to load audio: {stderr}") from exc
+
+        return (
+            mx.array(np.frombuffer(out, np.int16)).flatten().astype(mx.float32)
+            / 32768.0
+        )
+
+    mlx_audio.load_audio = _bundled_load_audio
+    mlx_audio._mytranscriber_ffmpeg_patch = True
+    append_debug_log(f"mlx_whisper audio patched with ffmpeg={ffmpeg_binary}")
 
 
 def get_audio_duration(path):
@@ -365,12 +496,17 @@ def _transcribe_with_mlx(
     progress,
     logger,
 ):
+    ensure_binary_dir_on_path("ffmpeg")
+    ensure_binary_dir_on_path("ffprobe")
+
     try:
         import mlx_whisper
     except Exception as exc:
         raise RuntimeError(
             "MLX 백엔드 초기화에 실패했습니다. Apple Silicon 환경과 MLX 설치 상태를 확인해주세요."
         ) from exc
+
+    _patch_mlx_whisper_ffmpeg()
 
     model_repo = f"mlx-community/whisper-{model_size}-mlx"
     total_chunks = math.ceil(total_duration / CHUNK_SECONDS)
