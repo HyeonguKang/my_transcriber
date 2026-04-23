@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import traceback
 from datetime import datetime
@@ -17,6 +18,7 @@ CHUNK_SECONDS = 30
 DEFAULT_MODEL_SIZE = "large"
 DEFAULT_COMPUTE_TYPE = "int8"
 _BINARY_CACHE = {}
+_MLX_TRANSCRIPTION_LOCK = threading.Lock()
 
 
 def format_korean_time(seconds):
@@ -151,6 +153,20 @@ def get_output_dir():
     output_dir = os.path.join(get_app_base_dir(), "output_trans")
     os.makedirs(output_dir, exist_ok=True)
     return output_dir
+
+
+def make_non_conflicting_path(path):
+    path = os.path.abspath(path)
+    if not os.path.exists(path):
+        return path
+
+    base, extension = os.path.splitext(path)
+    suffix = 2
+    while True:
+        candidate = f"{base}-{suffix}{extension}"
+        if not os.path.exists(candidate):
+            return candidate
+        suffix += 1
 
 
 def _candidate_binary_paths(binary_name):
@@ -372,7 +388,9 @@ def _build_output_file(audio_file, backend_name, model_size):
     output_dir = get_output_dir()
     base_name = os.path.splitext(os.path.basename(audio_file))[0]
     timestamp = datetime.now().strftime("%y%m%d-%H%M%S")
-    return os.path.join(output_dir, f"{base_name}-{timestamp}.srt")
+    return make_non_conflicting_path(
+        os.path.join(output_dir, f"{base_name}-{timestamp}.srt")
+    )
 
 
 def _parse_srt_blocks(srt_path):
@@ -435,7 +453,9 @@ def build_timestamped_txt_output_path(srt_path):
     base_name = os.path.splitext(os.path.basename(srt_path))[0]
     normalized_base_name = re.sub(r"-\d{6}-\d{6}$", "", base_name)
     timestamp = datetime.now().strftime("%y%m%d-%H%M%S")
-    return os.path.join(directory, f"{normalized_base_name}-{timestamp}.txt")
+    return make_non_conflicting_path(
+        os.path.join(directory, f"{normalized_base_name}-{timestamp}.txt")
+    )
 
 
 def convert_srt_to_txt(srt_path, output_path=None):
@@ -456,6 +476,7 @@ def convert_srt_to_txt(srt_path, output_path=None):
         output_path = os.path.splitext(srt_path)[0] + ".txt"
     else:
         output_path = os.path.abspath(output_path)
+    output_path = make_non_conflicting_path(output_path)
 
     minute_buckets = {}
     for block in blocks:
@@ -663,14 +684,29 @@ def transcribe_to_srt(
     output_file = _build_output_file(audio_file, backend, runtime_model)
 
     if backend == "mlx":
-        _transcribe_with_mlx(
-            audio_file,
-            output_file,
-            model_size,
-            total_duration,
-            progress,
-            logger,
-        )
+        wait_started_at = time.perf_counter()
+        acquired_immediately = _MLX_TRANSCRIPTION_LOCK.acquire(blocking=False)
+
+        if not acquired_immediately:
+            logger("대기 중: 다른 Apple Silicon 전사가 진행 중입니다.")
+            _MLX_TRANSCRIPTION_LOCK.acquire()
+            waited_sec = time.perf_counter() - wait_started_at
+            logger(
+                "대기 완료: "
+                + f"{format_elapsed_time(waited_sec)} 후 변환을 시작합니다."
+            )
+
+        try:
+            _transcribe_with_mlx(
+                audio_file,
+                output_file,
+                model_size,
+                total_duration,
+                progress,
+                logger,
+            )
+        finally:
+            _MLX_TRANSCRIPTION_LOCK.release()
     else:
         _transcribe_with_faster_whisper(
             audio_file,
