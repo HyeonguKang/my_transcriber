@@ -138,7 +138,10 @@ class TranscriberApp:
         file_path = filedialog.askopenfilename(
             title="음성 또는 영상 파일 선택",
             filetypes=[
-                ("Media Files", "*.mp3 *.wav *.m4a *.aac *.mp4 *.mov *.mkv *.flac"),
+                (
+                    "Media Files",
+                    "*.mp3 *.wav *.m4a *.aac *.mp4 *.mov *.mkv *.flac *.webm",
+                ),
                 ("All Files", "*.*"),
             ],
         )
