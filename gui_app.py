@@ -20,16 +20,22 @@ from transcribe_mlx import (
 
 
 class TranscriberApp:
-    def __init__(self, root):
+    def __init__(self, root, open_new_window_callback, window_number=1):
         self.root = root
-        self.root.title("MyTranscriber")
+        self.root.title(
+            "MyTranscriber" if window_number == 1 else f"MyTranscriber {window_number}"
+        )
         self.root.geometry("760x560")
         self.root.resizable(False, False)
+        self.root.protocol("WM_DELETE_WINDOW", self.close_window)
 
+        self.open_new_window_callback = open_new_window_callback
+        self.window_number = window_number
         self.selected_file = ""
         self.output_file = ""
         self.txt_output_file = ""
         self.is_transcribing = False
+        self.is_closed = False
         self.worker_thread = None
         self.event_queue = queue.Queue()
 
@@ -65,11 +71,25 @@ class TranscriberApp:
         container = ttk.Frame(self.root, padding=24)
         container.pack(fill="both", expand=True)
 
+        header = ttk.Frame(container)
+        header.pack(fill="x", pady=(0, 20))
+
         ttk.Label(
-            container,
+            header,
             text="간단한 자막 변환기",
             font=("Helvetica", 20, "bold"),
-        ).pack(anchor="center", pady=(0, 20))
+        ).pack(side="left")
+
+        tk.Button(
+            header,
+            text="새 창 열기",
+            command=self.open_new_window_callback,
+            font=("Helvetica", 12, "bold"),
+            relief="ridge",
+            bd=2,
+            padx=12,
+            pady=6,
+        ).pack(side="right")
 
         self.select_button = self._create_action_section(
             container,
@@ -214,6 +234,9 @@ class TranscriberApp:
             self.event_queue.put(("error", str(exc)))
 
     def _poll_events(self):
+        if self.is_closed or not self.root.winfo_exists():
+            return
+
         while not self.event_queue.empty():
             event_type, payload = self.event_queue.get()
 
@@ -246,9 +269,13 @@ class TranscriberApp:
                 self._refresh_button_states(is_busy=False)
                 messagebox.showerror("변환 실패", payload)
 
-        self.root.after(100, self._poll_events)
+        if not self.is_closed and self.root.winfo_exists():
+            self.root.after(100, self._poll_events)
 
     def _tick_status(self):
+        if self.is_closed or not self.root.winfo_exists():
+            return
+
         if (
             self.transcription_started_at
             and self.worker_thread
@@ -261,7 +288,8 @@ class TranscriberApp:
                 self.last_progress["eta_sec"] = max(0, expected_total_sec - elapsed_sec)
             self._update_status_text()
 
-        self.root.after(1000, self._tick_status)
+        if not self.is_closed and self.root.winfo_exists():
+            self.root.after(1000, self._tick_status)
 
     def _update_status_text(self):
         progress = self.last_progress["progress_percent"]
@@ -360,6 +388,38 @@ class TranscriberApp:
             )
         )
 
+    def close_window(self):
+        if self.worker_thread and self.worker_thread.is_alive():
+            should_close = messagebox.askyesno(
+                "창 닫기",
+                "이 창에서 전사가 진행 중입니다. 그래도 창을 닫을까요?",
+            )
+            if not should_close:
+                return
+
+        self.is_closed = True
+        self.root.destroy()
+
+
+class AppManager:
+    def __init__(self, root):
+        self.root = root
+        self.window_count = 0
+
+    def create_window(self):
+        if self.window_count == 0:
+            window = self.root
+        else:
+            window = tk.Toplevel(self.root)
+
+        self.window_count += 1
+        TranscriberApp(
+            window,
+            open_new_window_callback=self.create_window,
+            window_number=self.window_count,
+        )
+        return window
+
 
 def main():
     multiprocessing.freeze_support()
@@ -367,7 +427,8 @@ def main():
         f"gui_main_start: pid={os.getpid()} executable={sys.executable if 'sys' in globals() else 'unknown'}"
     )
     root = tk.Tk()
-    TranscriberApp(root)
+    manager = AppManager(root)
+    manager.create_window()
     root.mainloop()
 
 
