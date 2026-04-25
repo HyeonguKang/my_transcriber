@@ -515,7 +515,12 @@ class TranscriberApp:
 
         self.start_transcription()
 
-    def _collect_files_with_extensions(self, directory_path, extensions):
+    def _collect_files_with_extensions(
+        self,
+        directory_path,
+        extensions,
+        skip_empty_files=False,
+    ):
         if not directory_path or not os.path.isdir(directory_path):
             return []
 
@@ -527,6 +532,8 @@ class TranscriberApp:
 
             _, extension = os.path.splitext(entry_name)
             if extension.lower() in extensions:
+                if skip_empty_files and os.path.getsize(full_path) == 0:
+                    continue
                 collected.append(full_path)
 
         return collected
@@ -536,6 +543,7 @@ class TranscriberApp:
             return self._collect_files_with_extensions(
                 selected_path,
                 {ext.lower() for ext in MEDIA_FILE_EXTENSIONS},
+                skip_empty_files=True,
             )
 
         if selected_path:
@@ -581,7 +589,11 @@ class TranscriberApp:
         if not selected_path:
             return
 
-        srt_files = self._collect_files_with_extensions(selected_path, {".srt"})
+        srt_files = self._collect_files_with_extensions(
+            selected_path,
+            {".srt"},
+            skip_empty_files=True,
+        )
         self._convert_selected_srt_inputs(srt_files, force_timestamped_output=True)
 
     def _convert_selected_srt_inputs(self, srt_files, force_timestamped_output):
@@ -676,6 +688,7 @@ class AppManager:
         self._bind_new_window_shortcut()
 
     def create_window(self):
+        reference_window = self._get_reference_window()
         if self.window_count == 0:
             window = self.root
         else:
@@ -687,7 +700,46 @@ class AppManager:
             open_new_window_callback=self.create_window,
             window_number=self.window_count,
         )
+        if self.window_count > 1:
+            self._position_new_window(window, reference_window)
         return window
+
+    def _get_reference_window(self):
+        focused_widget = self.root.focus_get()
+        if focused_widget is not None:
+            try:
+                return focused_widget.winfo_toplevel()
+            except tk.TclError:
+                pass
+        return self.root
+
+    def _position_new_window(self, window, reference_window):
+        try:
+            reference_window.update_idletasks()
+            window.update_idletasks()
+
+            offset_x = 40
+            offset_y = 40
+
+            width = window.winfo_width() or 760
+            height = window.winfo_height() or 560
+            ref_x = reference_window.winfo_x()
+            ref_y = reference_window.winfo_y()
+
+            new_x = ref_x + offset_x
+            new_y = ref_y + offset_y
+
+            screen_width = reference_window.winfo_screenwidth()
+            screen_height = reference_window.winfo_screenheight()
+
+            max_x = max(0, screen_width - width)
+            max_y = max(0, screen_height - height)
+            new_x = min(max(0, new_x), max_x)
+            new_y = min(max(0, new_y), max_y)
+
+            window.geometry(f"{width}x{height}+{new_x}+{new_y}")
+        except tk.TclError:
+            return
 
     def _bind_new_window_shortcut(self):
         self.root.bind_all("<Command-n>", self._handle_new_window_shortcut)
