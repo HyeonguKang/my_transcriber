@@ -20,7 +20,7 @@ jobs:
           - runner: macos-14
             label: arm64
           - runner: macos-15-intel
-            label: intel
+            label: intel-cpu
 
     steps:
       - name: Checkout
@@ -40,6 +40,7 @@ jobs:
       - name: Build app
         env:
           RELEASE_VERSION: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '' }}
+          MYTRANSCRIBER_BUILD_PROFILE: ${{ matrix.label }}
         run: ./build_macos_app.sh
 
       - name: Upload artifact

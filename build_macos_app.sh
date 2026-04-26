@@ -7,16 +7,36 @@ cd "$SCRIPT_DIR"
 APP_NAME="MyTranscriber"
 ARCH_RAW="$(uname -m)"
 RELEASE_VERSION="${RELEASE_VERSION:-}"
+BUILD_PROFILE="${MYTRANSCRIBER_BUILD_PROFILE:-}"
 
-case "$ARCH_RAW" in
-  arm64|aarch64)
+if [[ -z "$BUILD_PROFILE" ]]; then
+  case "$ARCH_RAW" in
+    arm64|aarch64)
+      BUILD_PROFILE="arm64"
+      ;;
+    x86_64)
+      BUILD_PROFILE="intel-cpu"
+      ;;
+    *)
+      echo "지원하지 않는 아키텍처입니다: $ARCH_RAW"
+      exit 1
+      ;;
+  esac
+fi
+
+case "$BUILD_PROFILE" in
+  arm64)
     ARCH_LABEL="arm64"
     ;;
-  x86_64)
-    ARCH_LABEL="intel"
+  intel-cpu)
+    ARCH_LABEL="intel-cpu"
+    ;;
+  intel-amd-gpu)
+    echo "intel-amd-gpu 빌드 프로필은 아직 whisper.cpp 기반 런타임 번들링이 완료되지 않아 사용할 수 없습니다."
+    exit 1
     ;;
   *)
-    echo "지원하지 않는 아키텍처입니다: $ARCH_RAW"
+    echo "지원하지 않는 빌드 프로필입니다: $BUILD_PROFILE"
     exit 1
     ;;
 esac
@@ -68,4 +88,4 @@ echo ""
 echo "빌드 완료:"
 echo "  앱:  $SCRIPT_DIR/dist/${APP_NAME}.app"
 echo "  압축: $SCRIPT_DIR/release/${ZIP_NAME}"
-echo "  아키텍처: ${ARCH_LABEL}"
+echo "  빌드 프로필: ${BUILD_PROFILE}"

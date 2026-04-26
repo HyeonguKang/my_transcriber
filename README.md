@@ -5,9 +5,16 @@ macOS에서 음성/영상 파일을 SRT 자막으로 변환하는 간단한 GUI 
 ## 백엔드 동작 방식
 
 - Apple Silicon Mac: `mlx-whisper`
-- Intel Mac: `faster-whisper`
+- Intel CPU 빌드: `faster-whisper`
 
-앱은 실행 중 Mac 아키텍처를 확인해서 전사 엔진을 자동 선택합니다.
+실전 엔진 코드는 이제 [`transcribe_engine.py`](/Users/hyeongu/Documents/my_transcriber/transcribe_engine.py:1)에 모여 있고, 기존 [`transcribe_mlx.py`](/Users/hyeongu/Documents/my_transcriber/transcribe_mlx.py:1)는 호환용 래퍼만 남겨둔 상태입니다.
+
+현재 프로젝트가 실제로 지원하는 빌드 프로필은 다음 두 가지입니다.
+
+- `arm64`
+- `intel-cpu`
+
+`intel-amd-gpu`는 향후 `whisper.cpp` 계열 백엔드를 분리 번들링하기 위한 예약 프로필이며, 아직 런타임이 포함되어 있지 않습니다.
 
 ## 개발 실행
 
@@ -18,6 +25,12 @@ python -m pip install -r requirements.txt
 python -m pip install -r requirements-apple-silicon.txt  # Apple Silicon only
 brew install ffmpeg
 python gui_app.py
+```
+
+CLI로 직접 실행할 때는:
+
+```bash
+python transcribe_engine.py input.m4a
 ```
 
 ## 로컬 앱 빌드
@@ -31,14 +44,15 @@ source .venv/bin/activate
 빌드가 끝나면 현재 머신 아키텍처에 맞는 이름으로 압축 파일이 생성됩니다.
 
 - Apple Silicon: `release/MyTranscriber-macos-arm64.zip`
-- Intel Mac: `release/MyTranscriber-macos-intel.zip`
+- Intel CPU: `release/MyTranscriber-macos-intel-cpu.zip`
 
 ## 멀티 아키텍처 배포 전략
 
 - Apple Silicon에서 빌드하면 `arm64` 배포본이 생성됩니다.
-- Intel Mac에서 빌드하면 `intel` 배포본이 생성됩니다.
+- Intel Mac에서 빌드하면 `intel-cpu` 배포본이 생성됩니다.
 - 두 아키텍처를 모두 배포하려면 보통 두 환경에서 각각 한 번씩 빌드합니다.
 - 공통 의존성은 `requirements.txt`, Apple Silicon 전용 의존성은 `requirements-apple-silicon.txt`에 분리되어 있습니다.
+- `intel-amd-gpu` 분리 배포는 구조만 먼저 잡아둔 상태이며, 실제 백엔드 번들링은 아직 진행 중입니다.
 
 ## GitHub Actions CI
 
@@ -46,7 +60,7 @@ source .venv/bin/activate
 
 - [`build-macos.yml`](/Users/hyeongu/Documents/my_transcriber/.github/workflows/build-macos.yml:1)
 - `macos-14`에서 `arm64`
-- `macos-15-intel`에서 `intel`
+- `macos-15-intel`에서 `intel-cpu`
 - GitHub Actions Python 버전은 CI 호환성을 위해 `3.12`를 사용합니다.
 
 태그 푸시(`v*`) 또는 수동 실행으로 두 아키텍처 아티팩트를 자동 생성할 수 있습니다.

@@ -9,7 +9,7 @@ import traceback
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-from transcribe_mlx import (
+from transcribe_engine import (
     append_debug_log,
     build_timestamped_txt_output_path,
     convert_srt_to_txt,
